@@ -486,8 +486,8 @@ pub fn verify_dns_length(domain_name: &str, allow_trailing_dot: bool) -> bool {
 }
 
 /// An implementation of UTS #46.
+#[non_exhaustive]
 pub struct Uts46 {
-    data: idna_adapter::Adapter,
 }
 
 #[cfg(feature = "compiled_data")]
@@ -502,7 +502,6 @@ impl Uts46 {
     #[cfg(feature = "compiled_data")]
     pub const fn new() -> Self {
         Self {
-            data: idna_adapter::Adapter::new(),
         }
     }
 
@@ -1058,6 +1057,8 @@ impl Uts46 {
             }
         };
 
+        let data = idna_adapter::Adapter::new();
+
         let deny_list = ascii_deny_list.bits;
         let deny_list_deny_dot = deny_list | DOT_MASK;
 
@@ -1125,6 +1126,7 @@ impl Uts46 {
                                     deny_list_deny_dot,
                                     fail_fast,
                                     &mut had_errors,
+                                    &data,
                                 ) {
                                     return (0, false, true);
                                 }
@@ -1136,6 +1138,7 @@ impl Uts46 {
                                     &mut had_errors,
                                     true,
                                     true,
+                                    &data,
                                 ) {
                                     return (0, false, true);
                                 }
@@ -1207,8 +1210,7 @@ impl Uts46 {
                 already_punycode.push(AlreadyAsciiLabel::Other);
                 let mut first_needs_combining_mark_check = ascii.is_empty();
                 let mut needs_contextj_check = !non_ascii.is_empty();
-                let mut mapping = self
-                    .data
+                let mut mapping = data
                     .map_normalize(non_ascii.chars())
                     .map(|c| apply_ascii_deny_list_to_lower_cased_unicode(c, deny_list));
                 loop {
@@ -1285,6 +1287,7 @@ impl Uts46 {
                                             deny_list_deny_dot,
                                             fail_fast,
                                             &mut had_errors,
+                                            &data,
                                         ) {
                                             return (0, false, true);
                                         }
@@ -1310,6 +1313,7 @@ impl Uts46 {
                                 &mut had_errors,
                                 first_needs_combining_mark_check,
                                 needs_contextj_check,
+                                &data,
                             ) {
                                 return (0, false, true);
                             }
@@ -1340,11 +1344,11 @@ impl Uts46 {
             }
         }
 
-        let is_bidi = self.is_bidi(domain_buffer);
+        let is_bidi = self.is_bidi(domain_buffer, &data);
         if is_bidi {
             for label in domain_buffer.split_mut(|c| *c == '.') {
                 if let Some((first, tail)) = label.split_first_mut() {
-                    let first_bc = self.data.bidi_class(*first);
+                    let first_bc = data.bidi_class(*first);
                     if !FIRST_BC_MASK.intersects(first_bc.to_mask()) {
                         // Neither RTL label nor LTR label
                         if fail_fast {
@@ -1360,7 +1364,7 @@ impl Uts46 {
                     #[allow(clippy::while_let_loop)]
                     loop {
                         if let Some((last, prior)) = middle.split_last_mut() {
-                            let last_bc = self.data.bidi_class(*last);
+                            let last_bc = data.bidi_class(*last);
                             if last_bc.is_nonspacing_mark() {
                                 middle = prior;
                                 continue;
@@ -1375,7 +1379,7 @@ impl Uts46 {
                             }
                             if is_ltr {
                                 for c in prior.iter_mut() {
-                                    let bc = self.data.bidi_class(*c);
+                                    let bc = data.bidi_class(*c);
                                     if !MIDDLE_LTR_MASK.intersects(bc.to_mask()) {
                                         if fail_fast {
                                             return (0, false, true);
@@ -1387,7 +1391,7 @@ impl Uts46 {
                             } else {
                                 let mut numeral_state = RtlNumeralState::Undecided;
                                 for c in prior.iter_mut() {
-                                    let bc = self.data.bidi_class(*c);
+                                    let bc = data.bidi_class(*c);
                                     if !MIDDLE_RTL_MASK.intersects(bc.to_mask()) {
                                         if fail_fast {
                                             return (0, false, true);
@@ -1460,9 +1464,9 @@ impl Uts46 {
         deny_list_deny_dot: u128,
         fail_fast: bool,
         had_errors: &mut bool,
+        data: &idna_adapter::Adapter,
     ) -> bool {
-        for c in self
-            .data
+        for c in data
             .normalize_validate(label_buffer.iter().copied())
             .map(|c| apply_ascii_deny_list_to_lower_cased_unicode(c, deny_list_deny_dot))
         {
@@ -1506,6 +1510,7 @@ impl Uts46 {
         had_errors: &mut bool,
         first_needs_combining_mark_check: bool,
         needs_contextj_check: bool,
+        data: &idna_adapter::Adapter,
     ) -> bool {
         if hyphens != Hyphens::Allow
             && check_hyphens(
@@ -1519,7 +1524,7 @@ impl Uts46 {
         }
         if first_needs_combining_mark_check {
             if let Some(first) = mut_label.first_mut() {
-                if self.data.is_mark(*first) {
+                if data.is_mark(*first) {
                     if fail_fast {
                         return true;
                     }
@@ -1539,7 +1544,7 @@ impl Uts46 {
 
                 if let Some((joiner, tail)) = joiner_and_tail.split_first_mut() {
                     if let Some(previous) = head.last() {
-                        if self.data.is_virama(*previous) {
+                        if data.is_virama(*previous) {
                             continue;
                         }
                     } else {
@@ -1564,9 +1569,11 @@ impl Uts46 {
                     if !self.has_appropriately_joining_char(
                         head.iter().rev().copied(),
                         LEFT_OR_DUAL_JOINING_MASK,
+                        data,
                     ) || !self.has_appropriately_joining_char(
                         tail.iter().copied(),
                         RIGHT_OR_DUAL_JOINING_MASK,
+                        data,
                     ) {
                         if fail_fast {
                             return true;
@@ -1598,9 +1605,10 @@ impl Uts46 {
         &self,
         iter: I,
         required_mask: JoiningTypeMask,
+        data: &idna_adapter::Adapter,
     ) -> bool {
         for c in iter {
-            let jt = self.data.joining_type(c);
+            let jt = data.joining_type(c);
             if jt.to_mask().intersects(required_mask) {
                 return true;
             }
@@ -1613,7 +1621,7 @@ impl Uts46 {
     }
 
     #[inline(always)]
-    fn is_bidi(&self, buffer: &[char]) -> bool {
+    fn is_bidi(&self, buffer: &[char], data: &idna_adapter::Adapter) -> bool {
         for &c in buffer {
             if c < '\u{0590}' {
                 // Below Hebrew
@@ -1632,7 +1640,7 @@ impl Uts46 {
             if in_inclusive_range_char(c, '\u{11000}', '\u{1E7FF}') {
                 continue;
             }
-            if RTL_MASK.intersects(self.data.bidi_class(c).to_mask()) {
+            if RTL_MASK.intersects(data.bidi_class(c).to_mask()) {
                 return true;
             }
         }
