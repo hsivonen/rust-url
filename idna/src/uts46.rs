@@ -494,6 +494,10 @@ pub struct Uts46 {
     // case non-`compiled_data` constructor is ever added,
     // and for now `idna_adapter::Adapter` is constructed
     // only after the fastest ASCII fast path.
+    //
+    // We also can't store a once-constructed instance of
+    // this struct in a `static`, because the ICU4X data
+    // isn't always `Send` & `Sync`.
 }
 
 #[cfg(feature = "compiled_data")]
