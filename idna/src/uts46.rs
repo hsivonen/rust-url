@@ -488,6 +488,12 @@ pub fn verify_dns_length(domain_name: &str, allow_trailing_dot: bool) -> bool {
 /// An implementation of UTS #46.
 #[non_exhaustive]
 pub struct Uts46 {
+    // Sadly, even the const-constructible `compiled_data`
+    // versions of the ICU4X objects have a run-time cost
+    // to construct, so this struct is a placeholder in
+    // case non-`compiled_data` constructor is ever added,
+    // and for now `idna_adapter::Adapter` is constructed
+    // only after the fastest ASCII fast path.
 }
 
 #[cfg(feature = "compiled_data")]
@@ -501,8 +507,7 @@ impl Uts46 {
     /// Constructor using data compiled into the binary.
     #[cfg(feature = "compiled_data")]
     pub const fn new() -> Self {
-        Self {
-        }
+        Self {}
     }
 
     // XXX Should there be an `icu_provider` feature for enabling
@@ -1025,9 +1030,8 @@ impl Uts46 {
         Ok(ProcessingSuccess::WroteToSink)
     }
 
-    /// The part of `process` that doesn't need to be generic over the sink and
-    /// can avoid monomorphizing in the interest of code size.
-    #[inline(never)]
+    /// The part of `process` that doesn't need to be generic over the sink.
+    #[inline(always)]
     fn process_inner<'a>(
         &self,
         domain_name: &'a [u8],
@@ -1041,7 +1045,7 @@ impl Uts46 {
         // performance.
         let mut iter = domain_name.iter();
         let mut most_recent_label_start = iter.clone();
-        let tail = loop {
+        loop {
             if let Some(&b) = iter.next() {
                 if in_inclusive_range8(b, b'a', b'z') {
                     continue;
@@ -1050,13 +1054,37 @@ impl Uts46 {
                     most_recent_label_start = iter.clone();
                     continue;
                 }
-                break most_recent_label_start.as_slice();
+                return self.process_innermost(
+                    domain_name,
+                    ascii_deny_list,
+                    hyphens,
+                    fail_fast,
+                    domain_buffer,
+                    already_punycode,
+                    most_recent_label_start.as_slice(),
+                );
             } else {
                 // Success! The whole input passes through on the fastest path!
                 return (domain_name.len(), false, false);
             }
-        };
+        }
+    }
 
+    /// The part of `process` that doesn't need to be generic over the sink and
+    /// can avoid monomorphizing in the interest of code size.
+    /// Separating this into a different stack frame compared to `process_inner`
+    /// improves performance in the ICU4X case.
+    #[inline(never)]
+    fn process_innermost<'a>(
+        &self,
+        domain_name: &'a [u8],
+        ascii_deny_list: AsciiDenyList,
+        hyphens: Hyphens,
+        fail_fast: bool,
+        domain_buffer: &mut SmallVec<[char; 253]>,
+        already_punycode: &mut SmallVec<[AlreadyAsciiLabel<'a>; 8]>,
+        tail: &'a [u8],
+    ) -> (usize, bool, bool) {
         let data = idna_adapter::Adapter::new();
 
         let deny_list = ascii_deny_list.bits;
